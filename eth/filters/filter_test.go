@@ -24,15 +24,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/triedb"
@@ -601,4 +605,191 @@ func TestRangeLogs(t *testing.T) {
 	expEvent(rangeLogsTestResults, 400, 1001)
 	expEvent(rangeLogsTestReorg, 400, 901)
 	expEvent(rangeLogsTestDone, 0, 0)
+}
+
+func TestPendingLogsSimple(t *testing.T) {
+	// Create a simple mock backend
+	mockBackend := &mockBackend{
+		pendingBlock: types.NewBlock(
+			&types.Header{
+				Number: big.NewInt(100),
+				Bloom:  types.Bloom{},
+			},
+			nil, nil, nil,
+		),
+		pendingReceipts: types.Receipts{
+			{
+				Logs: []*types.Log{
+					{
+						Address:     common.HexToAddress("0x123"),
+						Topics:      []common.Hash{common.HexToHash("0x456")},
+						Data:        []byte{},
+						BlockNumber: 100,
+						TxHash:      common.HexToHash("0x789"),
+						TxIndex:     0,
+						Index:       0,
+					},
+				},
+			},
+		},
+	}
+
+	// Test that the Pending method works
+	block, receipts, _ := mockBackend.Pending()
+	if block == nil {
+		t.Fatal("Expected pending block but got nil")
+	}
+	if len(receipts) == 0 {
+		t.Fatal("Expected pending receipts but got empty")
+	}
+	if len(receipts[0].Logs) == 0 {
+		t.Fatal("Expected pending logs but got empty")
+	}
+
+	t.Logf("Successfully got pending block with %d receipts and %d logs", len(receipts), len(receipts[0].Logs))
+}
+
+func TestPendingLogs(t *testing.T) {
+	// Create a mock backend that returns pending logs
+	mockBackend := &mockBackend{
+		pendingBlock: types.NewBlock(
+			&types.Header{
+				Number: big.NewInt(100),
+				Bloom:  types.Bloom{},
+			},
+			nil, nil, nil,
+		),
+		pendingReceipts: types.Receipts{
+			{
+				Logs: []*types.Log{
+					{
+						Address:     common.HexToAddress("0x123"),
+						Topics:      []common.Hash{common.HexToHash("0x456")},
+						Data:        []byte{},
+						BlockNumber: 100,
+						TxHash:      common.HexToHash("0x789"),
+						TxIndex:     0,
+						Index:       0,
+					},
+				},
+			},
+		},
+	}
+
+	// Create filter system
+	filterSystem := NewFilterSystem(mockBackend, Config{})
+
+	// Create event system
+	eventSystem := NewEventSystem(filterSystem)
+
+	// Create a channel to receive logs
+	logsChan := make(chan []*types.Log, 10)
+
+	// Subscribe to pending logs
+	crit := ethereum.FilterQuery{
+		FromBlock: big.NewInt(-2), // Pending block number
+		ToBlock:   big.NewInt(-2), // Pending block number
+		Addresses: []common.Address{common.HexToAddress("0x123")},
+		Topics:    [][]common.Hash{{common.HexToHash("0x456")}},
+	}
+
+	sub, err := eventSystem.SubscribeLogs(crit, logsChan)
+	if err != nil {
+		t.Fatalf("Failed to subscribe to logs: %v", err)
+	}
+	defer sub.Unsubscribe()
+
+	t.Logf("Successfully created pending logs subscription with ID: %s", sub.ID)
+}
+
+func TestPendingLogsDirect(t *testing.T) {
+	// Create a mock backend that returns pending logs
+	mockBackend := &mockBackend{
+		pendingBlock: types.NewBlock(
+			&types.Header{
+				Number: big.NewInt(100),
+				Bloom:  types.Bloom{},
+			},
+			nil, nil, nil,
+		),
+		pendingReceipts: types.Receipts{
+			{
+				Logs: []*types.Log{
+					{
+						Address:     common.HexToAddress("0x123"),
+						Topics:      []common.Hash{common.HexToHash("0x456")},
+						Data:        []byte{},
+						BlockNumber: 100,
+						TxHash:      common.HexToHash("0x789"),
+						TxIndex:     0,
+						Index:       0,
+					},
+				},
+			},
+		},
+	}
+
+	// Create filter system
+	filterSystem := NewFilterSystem(mockBackend, Config{})
+
+	// Create a filter
+	filter := &Filter{
+		sys:       filterSystem,
+		addresses: []common.Address{common.HexToAddress("0x123")},
+		topics:    [][]common.Hash{{common.HexToHash("0x456")}},
+	}
+
+	// Test the pendingLogs function directly
+	logs := filter.pendingLogs()
+	if len(logs) == 0 {
+		t.Error("Expected pending logs but got none")
+	} else {
+		t.Logf("Successfully got %d pending logs", len(logs))
+		for i, log := range logs {
+			t.Logf("Log %d: Address=%s, Topics=%v", i, log.Address.Hex(), log.Topics)
+		}
+	}
+}
+
+// Mock backend for testing
+type mockBackend struct {
+	pendingBlock    *types.Block
+	pendingReceipts types.Receipts
+}
+
+func (b *mockBackend) ChainDb() ethdb.Database                    { return nil }
+func (b *mockBackend) HeaderByNumber(ctx context.Context, blockNr rpc.BlockNumber) (*types.Header, error) {
+	return nil, nil
+}
+func (b *mockBackend) HeaderByHash(ctx context.Context, blockHash common.Hash) (*types.Header, error) {
+	return nil, nil
+}
+func (b *mockBackend) GetBody(ctx context.Context, hash common.Hash, number rpc.BlockNumber) (*types.Body, error) {
+	return nil, nil
+}
+func (b *mockBackend) GetReceipts(ctx context.Context, blockHash common.Hash) (types.Receipts, error) {
+	return nil, nil
+}
+func (b *mockBackend) GetLogs(ctx context.Context, blockHash common.Hash, number uint64) ([][]*types.Log, error) {
+	return nil, nil
+}
+func (b *mockBackend) CurrentHeader() *types.Header { return nil }
+func (b *mockBackend) ChainConfig() *params.ChainConfig { return nil }
+func (b *mockBackend) HistoryPruningCutoff() uint64 { return 0 }
+func (b *mockBackend) SubscribeNewTxsEvent(ch chan<- core.NewTxsEvent) event.Subscription { 
+	return event.NewSubscription(func(quit <-chan struct{}) error { return nil })
+}
+func (b *mockBackend) SubscribeChainEvent(ch chan<- core.ChainEvent) event.Subscription { 
+	return event.NewSubscription(func(quit <-chan struct{}) error { return nil })
+}
+func (b *mockBackend) SubscribeRemovedLogsEvent(ch chan<- core.RemovedLogsEvent) event.Subscription { 
+	return event.NewSubscription(func(quit <-chan struct{}) error { return nil })
+}
+func (b *mockBackend) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscription { 
+	return event.NewSubscription(func(quit <-chan struct{}) error { return nil })
+}
+func (b *mockBackend) CurrentView() *filtermaps.ChainView { return nil }
+func (b *mockBackend) NewMatcherBackend() filtermaps.MatcherBackend { return nil }
+func (b *mockBackend) Pending() (*types.Block, types.Receipts, *state.StateDB) {
+	return b.pendingBlock, b.pendingReceipts, nil
 }

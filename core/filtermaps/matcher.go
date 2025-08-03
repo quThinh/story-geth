@@ -274,7 +274,7 @@ func (m *matcherEnv) getLogsFromMatches(matches potentialMatches) ([]*types.Log,
 		if err != nil {
 			return logs, fmt.Errorf("failed to retrieve log at index %d: %v", match, err)
 		}
-		if log != nil {
+	if log != nil {
 			logs = append(logs, log)
 		}
 		matchLogLookup.Mark(1)

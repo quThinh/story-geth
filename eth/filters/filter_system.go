@@ -37,6 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/core/state"
 )
 
 // Config represents the configuration of the filter system.
@@ -73,6 +74,9 @@ type Backend interface {
 
 	CurrentView() *filtermaps.ChainView
 	NewMatcherBackend() filtermaps.MatcherBackend
+	
+	// Pending returns the pending block and its receipts
+	Pending() (*types.Block, types.Receipts, *state.StateDB)
 }
 
 // FilterSystem holds resources shared by all filters.
@@ -154,6 +158,8 @@ const (
 	// PendingTransactionsSubscription queries for pending transactions entering
 	// the pending state
 	PendingTransactionsSubscription
+	// PendingLogsSubscription queries for logs from pending transactions
+	PendingLogsSubscription
 	// BlocksSubscription queries hashes for blocks that are imported
 	BlocksSubscription
 	// LastIndexSubscription keeps track of the last index
@@ -284,8 +290,7 @@ func (es *EventSystem) subscribe(sub *subscription) *Subscription {
 }
 
 // SubscribeLogs creates a subscription that will write all logs matching the
-// given criteria to the given logs channel. Default value for the from and to
-// block is "latest". If the fromBlock > toBlock an error is returned.
+// given criteria to the given logs channel.
 func (es *EventSystem) SubscribeLogs(crit ethereum.FilterQuery, logs chan []*types.Log) (*Subscription, error) {
 	if len(crit.Topics) > maxTopics {
 		return nil, errExceedMaxTopics
@@ -302,9 +307,19 @@ func (es *EventSystem) SubscribeLogs(crit ethereum.FilterQuery, logs chan []*typ
 		to = rpc.BlockNumber(crit.ToBlock.Int64())
 	}
 
-	// Pending logs are not supported anymore.
+	// Enable pending logs support
 	if from == rpc.PendingBlockNumber || to == rpc.PendingBlockNumber {
-		return nil, errPendingLogsUnsupported
+		// For pending logs, we need to handle them specially
+		if from == rpc.PendingBlockNumber && to == rpc.PendingBlockNumber {
+			// Only pending logs
+			return es.subscribePendingLogs(crit, logs), nil
+		} else if from == rpc.PendingBlockNumber {
+			// From pending to a specific block - not supported
+			return nil, errInvalidBlockRange
+		} else {
+			// From a specific block to pending - not supported
+			return nil, errInvalidBlockRange
+		}
 	}
 
 	if from == rpc.EarliestBlockNumber {
@@ -379,6 +394,23 @@ func (es *EventSystem) SubscribePendingTxs(txs chan []*types.Transaction) *Subsc
 	return es.subscribe(sub)
 }
 
+// subscribePendingLogs creates a subscription that will write pending logs matching the
+// given criteria to the given logs channel.
+func (es *EventSystem) subscribePendingLogs(crit ethereum.FilterQuery, logs chan []*types.Log) *Subscription {
+	sub := &subscription{
+		id:        rpc.NewID(),
+		typ:       PendingLogsSubscription,
+		logsCrit:  crit,
+		created:   time.Now(),
+		logs:      logs,
+		txs:       make(chan []*types.Transaction),
+		headers:   make(chan *types.Header),
+		installed: make(chan struct{}),
+		err:       make(chan error),
+	}
+	return es.subscribe(sub)
+}
+
 type filterIndex map[Type]map[rpc.ID]*subscription
 
 func (es *EventSystem) handleLogs(filters filterIndex, ev []*types.Log) {
@@ -405,6 +437,36 @@ func (es *EventSystem) handleChainEvent(filters filterIndex, ev core.ChainEvent)
 	}
 }
 
+func (es *EventSystem) handlePendingLogs(filters filterIndex) {
+	// Get pending logs from the backend
+	block, receipts, _ := es.backend.Pending()
+	if block == nil || receipts == nil {
+		return
+	}
+	
+	// Extract all logs from pending receipts
+	var pendingLogs []*types.Log
+	for _, receipt := range receipts {
+		pendingLogs = append(pendingLogs, receipt.Logs...)
+	}
+	
+	if len(pendingLogs) == 0 {
+		return
+	}
+	
+	// Send matching logs to pending log subscribers
+	for _, f := range filters[PendingLogsSubscription] {
+		matchedLogs := filterLogs(pendingLogs, f.logsCrit.FromBlock, f.logsCrit.ToBlock, f.logsCrit.Addresses, f.logsCrit.Topics)
+		if len(matchedLogs) > 0 {
+			select {
+			case f.logs <- matchedLogs:
+			default:
+				// Channel is full, skip this update
+			}
+		}
+	}
+}
+
 // eventLoop (un)installs filters and processes mux events.
 func (es *EventSystem) eventLoop() {
 	// Ensure all subscriptions get cleaned up
@@ -420,6 +482,10 @@ func (es *EventSystem) eventLoop() {
 		index[i] = make(map[rpc.ID]*subscription)
 	}
 
+	// Create a ticker to periodically check for pending logs
+	pendingTicker := time.NewTicker(1 * time.Second)
+	defer pendingTicker.Stop()
+
 	for {
 		select {
 		case ev := <-es.txsCh:
@@ -430,6 +496,8 @@ func (es *EventSystem) eventLoop() {
 			es.handleLogs(index, ev.Logs)
 		case ev := <-es.chainCh:
 			es.handleChainEvent(index, ev)
+		case <-pendingTicker.C:
+			es.handlePendingLogs(index)
 
 		case f := <-es.install:
 			index[f.typ][f.id] = f

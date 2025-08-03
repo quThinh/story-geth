@@ -93,9 +93,19 @@ func (f *Filter) Logs(ctx context.Context) ([]*types.Log, error) {
 		return f.blockLogs(ctx, header)
 	}
 
-	// Disallow pending logs.
-	if f.begin == rpc.PendingBlockNumber.Int64() || f.end == rpc.PendingBlockNumber.Int64() {
-		return nil, errPendingLogsUnsupported
+	var (
+		beginPending = f.begin == rpc.PendingBlockNumber.Int64()
+		endPending   = f.end == rpc.PendingBlockNumber.Int64()
+	)
+
+	// special case for pending logs
+	if beginPending && !endPending {
+		return nil, errInvalidBlockRange
+	}
+
+	// Short-cut if all we care about is pending logs
+	if beginPending && endPending {
+		return f.pendingLogs(), nil
 	}
 
 	resolveSpecial := func(number int64) (uint64, error) {
@@ -444,6 +454,22 @@ func (f *Filter) unindexedLogs(ctx context.Context, chainView *filtermaps.ChainV
 	}
 	log.Debug("Performed unindexed log search", "begin", begin, "end", end, "matches", len(matches), "elapsed", common.PrettyDuration(time.Since(start)))
 	return matches, nil
+}
+
+// pendingLogs returns the logs matching the filter criteria within the pending block.
+func (f *Filter) pendingLogs() []*types.Log {
+	block, receipts, _ := f.sys.backend.Pending()
+	if block == nil || receipts == nil {
+		return nil
+	}
+	if bloomFilter(block.Bloom(), f.addresses, f.topics) {
+		var unfiltered []*types.Log
+		for _, r := range receipts {
+			unfiltered = append(unfiltered, r.Logs...)
+		}
+		return filterLogs(unfiltered, nil, nil, f.addresses, f.topics)
+	}
+	return nil
 }
 
 // blockLogs returns the logs matching the filter criteria within a single block.
