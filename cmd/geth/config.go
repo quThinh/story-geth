@@ -131,8 +131,8 @@ func defaultNodeConfig() node.Config {
 	cfg := node.DefaultConfig
 	cfg.Name = clientIdentifier
 	cfg.Version = version.WithCommit(git.Commit, git.Date)
-	cfg.HTTPModules = append(cfg.HTTPModules, "eth")
-	cfg.WSModules = append(cfg.WSModules, "eth")
+	cfg.HTTPModules = append(cfg.HTTPModules, "eth", "txpool")
+	cfg.WSModules = append(cfg.WSModules, "eth", "txpool")
 	cfg.IPCPath = clientIdentifier + ".ipc"
 	return cfg
 }
