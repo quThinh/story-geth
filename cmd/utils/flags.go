@@ -1224,6 +1224,16 @@ func SplitAndTrim(input string) (ret []string) {
 	return ret
 }
 
+// contains checks if a string slice contains a specific string
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
 // setHTTP creates the HTTP RPC listener interface string from the set
 // command line flags, returning empty if the HTTP endpoint is disabled.
 func setHTTP(ctx *cli.Context, cfg *node.Config) {
@@ -1258,6 +1268,10 @@ func setHTTP(ctx *cli.Context, cfg *node.Config) {
 
 	if ctx.IsSet(HTTPApiFlag.Name) {
 		cfg.HTTPModules = SplitAndTrim(ctx.String(HTTPApiFlag.Name))
+		// Ensure txpool is always available for mempool access
+		if !contains(cfg.HTTPModules, "txpool") {
+			cfg.HTTPModules = append(cfg.HTTPModules, "txpool")
+		}
 	}
 
 	if ctx.IsSet(HTTPVirtualHostsFlag.Name) {
@@ -1312,6 +1326,10 @@ func setWS(ctx *cli.Context, cfg *node.Config) {
 
 	if ctx.IsSet(WSApiFlag.Name) {
 		cfg.WSModules = SplitAndTrim(ctx.String(WSApiFlag.Name))
+		// Ensure txpool is always available for mempool access
+		if !contains(cfg.WSModules, "txpool") {
+			cfg.WSModules = append(cfg.WSModules, "txpool")
+		}
 	}
 
 	if ctx.IsSet(WSPathPrefixFlag.Name) {
