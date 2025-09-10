@@ -440,7 +440,25 @@ func (api *FilterAPI) Subscribe(ctx context.Context, method string, args ...inte
 		return api.NewHeads(ctx)
 	case "logs":
 		if len(args) > 0 {
-			if crit, ok := args[0].(FilterCriteria); ok {
+			// Parse the filter criteria from the arguments
+			if critData, ok := args[0].(map[string]interface{}); ok {
+				crit := FilterCriteria{}
+				if addresses, ok := critData["address"].([]interface{}); ok {
+					crit.Addresses = make([]common.Address, len(addresses))
+					for i, addr := range addresses {
+						if addrStr, ok := addr.(string); ok {
+							crit.Addresses[i] = common.HexToAddress(addrStr)
+						}
+					}
+				}
+				if topics, ok := critData["topics"].([]interface{}); ok {
+					crit.Topics = make([][]common.Hash, len(topics))
+					for i, topic := range topics {
+						if topicStr, ok := topic.(string); ok {
+							crit.Topics[i] = []common.Hash{common.HexToHash(topicStr)}
+						}
+					}
+				}
 				return api.Logs(ctx, crit)
 			}
 		}
