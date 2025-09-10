@@ -424,49 +424,6 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 	return returnLogs(logs), nil
 }
 
-// Subscribe creates a subscription for the given method and arguments.
-// This is the main entry point for eth_subscribe calls.
-func (api *FilterAPI) Subscribe(ctx context.Context, method string, args ...interface{}) (*rpc.Subscription, error) {
-	switch method {
-	case "newPendingTransactions":
-		var fullTx *bool
-		if len(args) > 0 {
-			if ft, ok := args[0].(bool); ok {
-				fullTx = &ft
-			}
-		}
-		return api.NewPendingTransactions(ctx, fullTx)
-	case "newHeads":
-		return api.NewHeads(ctx)
-	case "logs":
-		if len(args) > 0 {
-			// Parse the filter criteria from the arguments
-			if critData, ok := args[0].(map[string]interface{}); ok {
-				crit := FilterCriteria{}
-				if addresses, ok := critData["address"].([]interface{}); ok {
-					crit.Addresses = make([]common.Address, len(addresses))
-					for i, addr := range addresses {
-						if addrStr, ok := addr.(string); ok {
-							crit.Addresses[i] = common.HexToAddress(addrStr)
-						}
-					}
-				}
-				if topics, ok := critData["topics"].([]interface{}); ok {
-					crit.Topics = make([][]common.Hash, len(topics))
-					for i, topic := range topics {
-						if topicStr, ok := topic.(string); ok {
-							crit.Topics[i] = []common.Hash{common.HexToHash(topicStr)}
-						}
-					}
-				}
-				return api.Logs(ctx, crit)
-			}
-		}
-		return nil, errors.New("invalid filter criteria for logs subscription")
-	default:
-		return nil, fmt.Errorf("unsupported subscription method: %s", method)
-	}
-}
 
 // GetFilterChanges returns the logs for the filter with the given id since
 // last time it was called. This can be used for polling.
