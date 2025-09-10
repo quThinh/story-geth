@@ -424,6 +424,32 @@ func (api *FilterAPI) GetFilterLogs(ctx context.Context, id rpc.ID) ([]*types.Lo
 	return returnLogs(logs), nil
 }
 
+// Subscribe creates a subscription for the given method and arguments.
+// This is the main entry point for eth_subscribe calls.
+func (api *FilterAPI) Subscribe(ctx context.Context, method string, args ...interface{}) (*rpc.Subscription, error) {
+	switch method {
+	case "newPendingTransactions":
+		var fullTx *bool
+		if len(args) > 0 {
+			if ft, ok := args[0].(bool); ok {
+				fullTx = &ft
+			}
+		}
+		return api.NewPendingTransactions(ctx, fullTx)
+	case "newHeads":
+		return api.NewHeads(ctx)
+	case "logs":
+		if len(args) > 0 {
+			if crit, ok := args[0].(FilterCriteria); ok {
+				return api.Logs(ctx, crit)
+			}
+		}
+		return nil, errors.New("invalid filter criteria for logs subscription")
+	default:
+		return nil, fmt.Errorf("unsupported subscription method: %s", method)
+	}
+}
+
 // GetFilterChanges returns the logs for the filter with the given id since
 // last time it was called. This can be used for polling.
 //
